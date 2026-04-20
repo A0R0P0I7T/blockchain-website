@@ -1,22 +1,31 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Section, SectionTitle, GlassCard, GlowButton, Skeleton } from "@/components/ui";
+import {
+  Section,
+  SectionTitle,
+  GlassCard,
+  GlowButton,
+  Skeleton,
+} from "@/components/ui";
 
 interface CryptoPrice {
   id: string;
   name: string;
   symbol: string;
-  icon: string;
   usd: number;
   usd_24h_change: number;
+  image?: string;
 }
 
-const COINS = [
-  { id: "bitcoin", name: "Bitcoin", symbol: "BTC", icon: "₿" },
-  { id: "ethereum", name: "Ethereum", symbol: "ETH", icon: "◆" },
-];
+interface SearchResult {
+  id: string;
+  name: string;
+  symbol: string;
+  thumb: string;
+  large: string;
+}
 
 // Simple sparkline component using SVG
 function Sparkline({
@@ -43,6 +52,8 @@ function Sparkline({
     })
     .join(" ");
 
+  const gradId = `spark-${color.replace("#", "")}`;
+
   return (
     <svg
       width={width}
@@ -51,14 +62,14 @@ function Sparkline({
       className="overflow-visible"
     >
       <defs>
-        <linearGradient id={`spark-${color}`} x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.3" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
       </defs>
       <polygon
         points={`0,${height} ${points} ${width},${height}`}
-        fill={`url(#spark-${color})`}
+        fill={`url(#${gradId})`}
       />
       <polyline
         points={points}
@@ -72,32 +83,95 @@ function Sparkline({
   );
 }
 
+// Default coins to always show
+const DEFAULT_COIN_IDS = ["bitcoin", "ethereum"];
+
 export default function PricesPage() {
+  const [trackedCoins, setTrackedCoins] = useState<string[]>(DEFAULT_COIN_IDS);
   const [prices, setPrices] = useState<CryptoPrice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [sparklineData, setSparklineData] = useState<Record<string, number[]>>({
-    bitcoin: [],
-    ethereum: [],
-  });
+  const [sparklineData, setSparklineData] = useState<
+    Record<string, number[]>
+  >({});
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Debounced search
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+
+    if (searchQuery.trim().length < 2) {
+      setSearchResults([]);
+      setSearchOpen(false);
+      return;
+    }
+
+    setSearchLoading(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(
+            searchQuery.trim()
+          )}`
+        );
+        if (!res.ok) throw new Error("Search failed");
+        const data = await res.json();
+        setSearchResults((data.coins || []).slice(0, 8));
+        setSearchOpen(true);
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchQuery]);
+
+  // Fetch prices for tracked coins
   const fetchPrices = useCallback(async () => {
+    if (trackedCoins.length === 0) return;
     try {
       setError(null);
+      const ids = trackedCoins.join(",");
       const response = await fetch(
-        "https://api.coingecko.com/api/v3/simple/price?ids=ethereum,bitcoin&vs_currencies=usd&include_24hr_change=true",
+        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
         { cache: "no-store" }
       );
 
       if (!response.ok) throw new Error("API request failed");
 
       const data = await response.json();
-      const newPrices: CryptoPrice[] = COINS.map((coin) => ({
-        ...coin,
-        usd: data[coin.id]?.usd ?? 0,
-        usd_24h_change: data[coin.id]?.usd_24h_change ?? 0,
-      }));
+      const newPrices: CryptoPrice[] = trackedCoins
+        .filter((id) => data[id])
+        .map((id) => ({
+          id,
+          name: id.charAt(0).toUpperCase() + id.slice(1).replace(/-/g, " "),
+          symbol: id.toUpperCase().slice(0, 5),
+          usd: data[id]?.usd ?? 0,
+          usd_24h_change: data[id]?.usd_24h_change ?? 0,
+        }));
 
       setPrices(newPrices);
       setLastUpdated(new Date());
@@ -106,11 +180,9 @@ export default function PricesPage() {
       // Append to sparkline data
       setSparklineData((prev) => {
         const next = { ...prev };
-        for (const coin of COINS) {
-          const price = data[coin.id]?.usd ?? 0;
+        for (const coin of newPrices) {
           const existing = prev[coin.id] || [];
-          // Keep last 20 data points
-          next[coin.id] = [...existing.slice(-19), price];
+          next[coin.id] = [...existing.slice(-19), coin.usd];
         }
         return next;
       });
@@ -118,25 +190,82 @@ export default function PricesPage() {
       setError("Unable to fetch prices. Check your connection or try again.");
       setLoading(false);
     }
-  }, []);
+  }, [trackedCoins]);
 
   useEffect(() => {
     fetchPrices();
-    const interval = setInterval(fetchPrices, 30000); // refresh every 30s
+    const interval = setInterval(fetchPrices, 30000);
     return () => clearInterval(interval);
   }, [fetchPrices]);
 
-  const formatPrice = (price: number) =>
-    new Intl.NumberFormat("en-US", {
+  const addCoin = (coin: SearchResult) => {
+    if (!trackedCoins.includes(coin.id)) {
+      setTrackedCoins((prev) => [...prev, coin.id]);
+    }
+    setSearchQuery("");
+    setSearchOpen(false);
+    setSearchResults([]);
+  };
+
+  const removeCoin = (coinId: string) => {
+    if (DEFAULT_COIN_IDS.includes(coinId)) return; // can't remove defaults
+    setTrackedCoins((prev) => prev.filter((id) => id !== coinId));
+    setPrices((prev) => prev.filter((p) => p.id !== coinId));
+    setSparklineData((prev) => {
+      const next = { ...prev };
+      delete next[coinId];
+      return next;
+    });
+  };
+
+  const formatPrice = (price: number) => {
+    if (price >= 1) {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(price);
+    }
+    return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 6,
     }).format(price);
+  };
 
   const formatChange = (change: number) => {
     const sign = change >= 0 ? "+" : "";
     return `${sign}${change.toFixed(2)}%`;
+  };
+
+  const getCoinIcon = (id: string) => {
+    const icons: Record<string, string> = {
+      bitcoin: "₿",
+      ethereum: "◆",
+      solana: "◎",
+      cardano: "₳",
+      polkadot: "●",
+      avalanche: "▲",
+      polygon: "⬡",
+      chainlink: "⬡",
+    };
+    return icons[id] || "●";
+  };
+
+  const getCoinColor = (id: string) => {
+    const colors: Record<string, string> = {
+      bitcoin: "#F7931A",
+      ethereum: "#627EEA",
+      solana: "#9945FF",
+      cardano: "#0033AD",
+      polkadot: "#E6007A",
+      avalanche: "#E84142",
+      polygon: "#8247E5",
+      chainlink: "#2A5ADA",
+    };
+    return colors[id] || "#28A0F0";
   };
 
   return (
@@ -145,8 +274,86 @@ export default function PricesPage() {
         <SectionTitle
           eyebrow="Real-Time Data"
           title="Live Crypto Prices"
-          description="Track Bitcoin and Ethereum prices in real-time, powered by the CoinGecko API."
+          description="Track any cryptocurrency in real-time. Search and add coins to your watchlist."
         />
+
+        {/* Search Bar */}
+        <div ref={searchRef} className="relative max-w-xl mx-auto mb-10">
+          <div className="relative">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted text-lg">
+              🔍
+            </span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => searchResults.length > 0 && setSearchOpen(true)}
+              placeholder="Search any cryptocurrency... (e.g. Solana, Dogecoin, Cardano)"
+              className="w-full pl-12 pr-4 py-3.5 rounded-[14px] bg-bg-secondary border border-border text-text-primary text-sm font-medium placeholder:text-text-muted focus:outline-none focus:border-primary/50 focus:shadow-[0_0_20px_rgba(40,160,240,0.15)] transition-all duration-300"
+            />
+            {searchLoading && (
+              <motion.span
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted"
+              >
+                ↻
+              </motion.span>
+            )}
+          </div>
+
+          {/* Search Results Dropdown */}
+          <AnimatePresence>
+            {searchOpen && searchResults.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={{ duration: 0.2 }}
+                className="absolute z-50 top-full mt-2 w-full rounded-[14px] bg-bg-secondary border border-border shadow-2xl overflow-hidden"
+              >
+                {searchResults.map((coin) => {
+                  const alreadyAdded = trackedCoins.includes(coin.id);
+                  return (
+                    <button
+                      key={coin.id}
+                      onClick={() => !alreadyAdded && addCoin(coin)}
+                      disabled={alreadyAdded}
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-all duration-200 ${
+                        alreadyAdded
+                          ? "opacity-40 cursor-default bg-bg-tertiary/30"
+                          : "hover:bg-bg-tertiary cursor-pointer"
+                      }`}
+                    >
+                      <img
+                        src={coin.thumb}
+                        alt={coin.name}
+                        className="w-7 h-7 rounded-full"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-text-primary block truncate">
+                          {coin.name}
+                        </span>
+                        <span className="text-xs text-text-muted font-mono uppercase">
+                          {coin.symbol}
+                        </span>
+                      </div>
+                      {alreadyAdded ? (
+                        <span className="text-xs text-text-muted">
+                          ✓ Added
+                        </span>
+                      ) : (
+                        <span className="text-xs text-primary font-medium">
+                          + Add
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
         {/* Controls */}
         <div className="flex items-center justify-between mb-8">
@@ -172,7 +379,11 @@ export default function PricesPage() {
               <>
                 <motion.span
                   animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                  transition={{
+                    duration: 1,
+                    repeat: Infinity,
+                    ease: "linear",
+                  }}
                   className="inline-block"
                 >
                   ↻
@@ -202,8 +413,8 @@ export default function PricesPage() {
         {/* Price Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {loading
-            ? COINS.map((coin) => (
-                <GlassCard key={coin.id} hover={false}>
+            ? DEFAULT_COIN_IDS.map((id) => (
+                <GlassCard key={id} hover={false}>
                   <div className="space-y-4">
                     <div className="flex items-center gap-3">
                       <Skeleton className="w-12 h-12 rounded-xl" />
@@ -219,18 +430,22 @@ export default function PricesPage() {
               ))
             : prices.map((coin, i) => {
                 const isPositive = coin.usd_24h_change >= 0;
-                const changeColor = isPositive ? "text-success" : "text-danger";
-                const glowType = isPositive ? "success" : "danger";
                 const sparkColor = isPositive ? "#00D395" : "#FF4D6A";
+                const coinColor = getCoinColor(coin.id);
+                const isRemovable = !DEFAULT_COIN_IDS.includes(coin.id);
 
                 return (
                   <motion.div
                     key={coin.id}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.15, duration: 0.5 }}
+                    transition={{ delay: i * 0.1, duration: 0.5 }}
+                    layout
                   >
-                    <GlassCard hover={true} className="relative overflow-hidden">
+                    <GlassCard
+                      hover={true}
+                      className="relative overflow-hidden"
+                    >
                       {/* Subtle glow background */}
                       <div
                         className={`absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-10 ${
@@ -238,22 +453,33 @@ export default function PricesPage() {
                         }`}
                       />
 
+                      {/* Remove button for non-default coins */}
+                      {isRemovable && (
+                        <button
+                          onClick={() => removeCoin(coin.id)}
+                          className="absolute top-4 right-4 w-6 h-6 rounded-full bg-bg-tertiary border border-border flex items-center justify-center text-text-muted hover:text-danger hover:border-danger/30 transition-all duration-200 text-xs z-10"
+                          title="Remove from watchlist"
+                        >
+                          ✕
+                        </button>
+                      )}
+
                       <div className="relative z-10">
                         {/* Header */}
                         <div className="flex items-center justify-between mb-4">
                           <div className="flex items-center gap-3">
                             <div
-                              className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold ${
-                                coin.id === "bitcoin"
-                                  ? "bg-[#F7931A]/20 text-[#F7931A]"
-                                  : "bg-[#627EEA]/20 text-[#627EEA]"
-                              }`}
+                              className="w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold"
+                              style={{
+                                backgroundColor: `${coinColor}20`,
+                                color: coinColor,
+                              }}
                             >
-                              {coin.icon}
+                              {getCoinIcon(coin.id)}
                             </div>
                             <div>
-                              <h3 className="font-semibold text-text-primary">
-                                {coin.name}
+                              <h3 className="font-semibold text-text-primary capitalize">
+                                {coin.name.replace(/-/g, " ")}
                               </h3>
                               <span className="text-xs text-text-muted font-mono">
                                 {coin.symbol}
@@ -326,9 +552,9 @@ export default function PricesPage() {
               desc: "Prices update every 30 seconds from CoinGecko",
             },
             {
-              icon: "📈",
-              title: "24h Change",
-              desc: "Track daily price movements with visual indicators",
+              icon: "🔍",
+              title: "Search Any Coin",
+              desc: "Search from thousands of cryptocurrencies",
             },
             {
               icon: "📊",

@@ -17,10 +17,10 @@ interface Block {
   hash: string;
   isValid: boolean;
   isMining: boolean;
+  isMined: boolean; // tracks if user has successfully mined this block
 }
 
-// Deterministic hash function (simulates SHA-256 without async)
-// Uses a simple but effective hash for visual demonstration
+// Deterministic hash function
 function simpleHash(input: string): string {
   let h1 = 0xdeadbeef;
   let h2 = 0x41c6ce57;
@@ -37,9 +37,12 @@ function simpleHash(input: string): string {
   return combined.toString(16).padStart(16, "0");
 }
 
-function computeHash(data: string, previousHash: string, nonce: number): string {
+function computeHash(
+  data: string,
+  previousHash: string,
+  nonce: number
+): string {
   const input = `${data}${previousHash}${nonce}`;
-  // Create a longer hash by hashing multiple times with different seeds
   const h1 = simpleHash(input);
   const h2 = simpleHash(input + h1);
   const h3 = simpleHash(input + h2);
@@ -47,8 +50,11 @@ function computeHash(data: string, previousHash: string, nonce: number): string 
   return (h1 + h2 + h3 + h4).slice(0, 64);
 }
 
+// Difficulty: hash must start with 4 zeros (official blockchain standard)
+const DIFFICULTY_PREFIX = "0000";
+
 function isHashValid(hash: string): boolean {
-  return hash.startsWith("00");
+  return hash.startsWith(DIFFICULTY_PREFIX);
 }
 
 function createBlock(
@@ -66,6 +72,7 @@ function createBlock(
     hash,
     isValid: isHashValid(hash),
     isMining: false,
+    isMined: false, // starts as not mined — user must click Mine
   };
 }
 
@@ -74,90 +81,53 @@ const GENESIS_HASH = "0".repeat(64);
 export default function SimulatorPage() {
   const [blocks, setBlocks] = useState<Block[]>([
     createBlock(1, "Alice sends 5 ETH to Bob", GENESIS_HASH),
-    createBlock(
-      2,
-      "Bob sends 2 ETH to Charlie",
-      computeHash("Alice sends 5 ETH to Bob", GENESIS_HASH, 0)
-    ),
+    createBlock(2, "Bob sends 2 ETH to Charlie", GENESIS_HASH),
   ]);
   const [miningBlockId, setMiningBlockId] = useState<number | null>(null);
   const miningRef = useRef(false);
 
-  const updateBlock = useCallback(
-    (blockId: number, updates: Partial<Block>) => {
-      setBlocks((prev) => {
-        const newBlocks = prev.map((b) => {
-          if (b.id === blockId) {
-            return { ...b, ...updates };
-          }
-          return b;
-        });
+  // When data changes, recalculate hashes and invalidate mined status
+  const handleDataChange = useCallback((blockId: number, newData: string) => {
+    setBlocks((prev) => {
+      const newBlocks = [...prev];
+      const idx = newBlocks.findIndex((b) => b.id === blockId);
+      if (idx === -1) return prev;
 
-        // Recalculate chain: update subsequent blocks' previousHash
-        for (let i = 1; i < newBlocks.length; i++) {
-          const prevBlock = newBlocks[i - 1];
-          if (newBlocks[i].previousHash !== prevBlock.hash) {
-            const newHash = computeHash(
-              newBlocks[i].data,
-              prevBlock.hash,
-              newBlocks[i].nonce
-            );
-            newBlocks[i] = {
-              ...newBlocks[i],
-              previousHash: prevBlock.hash,
-              hash: newHash,
-              isValid: isHashValid(newHash),
-            };
-          }
-        }
+      // Reset nonce to 0 and mark as not mined when data changes
+      const prevHash = idx === 0 ? GENESIS_HASH : newBlocks[idx - 1].hash;
+      const newHash = computeHash(newData, prevHash, 0);
+      newBlocks[idx] = {
+        ...newBlocks[idx],
+        data: newData,
+        nonce: 0,
+        hash: newHash,
+        isValid: isHashValid(newHash),
+        isMined: false, // data changed, needs re-mining
+      };
 
-        return newBlocks;
-      });
-    },
-    []
-  );
-
-  const handleDataChange = useCallback(
-    (blockId: number, newData: string) => {
-      setBlocks((prev) => {
-        const newBlocks = [...prev];
-        const idx = newBlocks.findIndex((b) => b.id === blockId);
-        if (idx === -1) return prev;
-
-        const prevHash =
-          idx === 0 ? GENESIS_HASH : newBlocks[idx - 1].hash;
-
-        const newHash = computeHash(newData, prevHash, newBlocks[idx].nonce);
-        newBlocks[idx] = {
-          ...newBlocks[idx],
-          data: newData,
-          hash: newHash,
-          isValid: isHashValid(newHash),
+      // Cascade to subsequent blocks — they all become invalid
+      for (let i = idx + 1; i < newBlocks.length; i++) {
+        const cascadeHash = computeHash(
+          newBlocks[i].data,
+          newBlocks[i - 1].hash,
+          0 // reset nonce
+        );
+        newBlocks[i] = {
+          ...newBlocks[i],
+          previousHash: newBlocks[i - 1].hash,
+          nonce: 0,
+          hash: cascadeHash,
+          isValid: isHashValid(cascadeHash),
+          isMined: false, // chain broken, needs re-mining
         };
+      }
 
-        // Cascade to subsequent blocks
-        for (let i = idx + 1; i < newBlocks.length; i++) {
-          const cascadeHash = computeHash(
-            newBlocks[i].data,
-            newBlocks[i - 1].hash,
-            newBlocks[i].nonce
-          );
-          newBlocks[i] = {
-            ...newBlocks[i],
-            previousHash: newBlocks[i - 1].hash,
-            hash: cascadeHash,
-            isValid: isHashValid(cascadeHash),
-          };
-        }
-
-        return newBlocks;
-      });
-    },
-    []
-  );
+      return newBlocks;
+    });
+  }, []);
 
   const mineBlock = useCallback(
-    async (blockId: number) => {
+    (blockId: number) => {
       if (miningRef.current) return;
       miningRef.current = true;
       setMiningBlockId(blockId);
@@ -167,24 +137,28 @@ export default function SimulatorPage() {
       );
 
       let nonce = 0;
-      const maxAttempts = 100000;
+      const maxAttempts = 5000000;
 
-      const block = blocks.find((b) => b.id === blockId);
-      if (!block) {
+      // Get current block state
+      const currentBlocks = blocks;
+      const idx = currentBlocks.findIndex((b) => b.id === blockId);
+      if (idx === -1) {
         miningRef.current = false;
+        setMiningBlockId(null);
         return;
       }
 
-      const idx = blocks.findIndex((b) => b.id === blockId);
-      const prevHash = idx === 0 ? GENESIS_HASH : blocks[idx - 1].hash;
+      const blockData = currentBlocks[idx].data;
+      const prevHash =
+        idx === 0 ? GENESIS_HASH : currentBlocks[idx - 1].hash;
 
-      // Mine with visual updates
+      // Mine with visual updates using requestAnimationFrame
       const mineStep = () => {
-        const batchSize = 100;
+        const batchSize = 500; // process 500 nonces per frame
         for (let i = 0; i < batchSize && nonce < maxAttempts; i++) {
-          const hash = computeHash(block.data, prevHash, nonce);
+          const hash = computeHash(blockData, prevHash, nonce);
           if (isHashValid(hash)) {
-            // Found valid hash
+            // Found valid hash!
             setBlocks((prev) => {
               const newBlocks = [...prev];
               const bIdx = newBlocks.findIndex((b) => b.id === blockId);
@@ -196,9 +170,10 @@ export default function SimulatorPage() {
                 hash,
                 isValid: true,
                 isMining: false,
+                isMined: true, // successfully mined
               };
 
-              // Cascade
+              // Cascade: update subsequent blocks' previousHash
               for (let j = bIdx + 1; j < newBlocks.length; j++) {
                 const cascadeHash = computeHash(
                   newBlocks[j].data,
@@ -210,6 +185,7 @@ export default function SimulatorPage() {
                   previousHash: newBlocks[j - 1].hash,
                   hash: cascadeHash,
                   isValid: isHashValid(cascadeHash),
+                  isMined: newBlocks[j].isMined && isHashValid(cascadeHash),
                 };
               }
 
@@ -222,22 +198,21 @@ export default function SimulatorPage() {
           nonce++;
         }
 
-        // Update nonce display during mining
+        // Update nonce display while mining (every frame)
         setBlocks((prev) =>
-          prev.map((b) =>
-            b.id === blockId
-              ? {
-                  ...b,
-                  nonce,
-                  hash: computeHash(block.data, prevHash, nonce),
-                }
-              : b
-          )
+          prev.map((b) => {
+            if (b.id === blockId) {
+              const currentHash = computeHash(blockData, prevHash, nonce);
+              return { ...b, nonce, hash: currentHash };
+            }
+            return b;
+          })
         );
 
         if (nonce < maxAttempts) {
           requestAnimationFrame(mineStep);
         } else {
+          // Max attempts reached
           setBlocks((prev) =>
             prev.map((b) =>
               b.id === blockId ? { ...b, isMining: false } : b
@@ -268,7 +243,7 @@ export default function SimulatorPage() {
             <div className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full bg-success" />
               <span className="text-text-secondary">
-                Valid block (hash starts with &quot;00&quot;)
+                Valid block (hash starts with &quot;{DIFFICULTY_PREFIX}&quot;)
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -280,7 +255,7 @@ export default function SimulatorPage() {
             <div className="flex items-center gap-2">
               <span className="text-text-muted">💡</span>
               <span className="text-text-secondary">
-                Edit Block 1 data → Block 2 breaks!
+                Edit Block 1 data → both blocks break and need re-mining!
               </span>
             </div>
           </div>
@@ -295,28 +270,39 @@ export default function SimulatorPage() {
                 <div className="flex justify-center my-4">
                   <motion.div
                     animate={{
-                      opacity: block.isValid ? [0.5, 1, 0.5] : 1,
+                      opacity:
+                        block.isMined && block.isValid
+                          ? [0.5, 1, 0.5]
+                          : 1,
                     }}
                     transition={
-                      block.isValid
+                      block.isMined && block.isValid
                         ? { duration: 2, repeat: Infinity }
                         : undefined
                     }
                     className={`flex flex-col items-center gap-1 ${
-                      block.isValid ? "text-success" : "text-danger"
+                      block.isMined && block.isValid
+                        ? "text-success"
+                        : "text-danger"
                     }`}
                   >
                     <div
                       className={`w-px h-6 ${
-                        block.isValid ? "bg-success/50" : "bg-danger/50"
+                        block.isMined && block.isValid
+                          ? "bg-success/50"
+                          : "bg-danger/50"
                       }`}
                     />
                     <span className="text-xs font-mono">
-                      {block.isValid ? "⛓ linked" : "✕ broken"}
+                      {block.isMined && block.isValid
+                        ? "⛓ linked"
+                        : "✕ broken"}
                     </span>
                     <div
                       className={`w-px h-6 ${
-                        block.isValid ? "bg-success/50" : "bg-danger/50"
+                        block.isMined && block.isValid
+                          ? "bg-success/50"
+                          : "bg-danger/50"
                       }`}
                     />
                   </motion.div>
@@ -329,6 +315,7 @@ export default function SimulatorPage() {
                 onMine={() => mineBlock(block.id)}
                 isMining={miningBlockId === block.id}
                 isGenesis={idx === 0}
+                difficultyPrefix={DIFFICULTY_PREFIX}
               />
             </div>
           ))}
@@ -339,28 +326,34 @@ export default function SimulatorPage() {
           <SectionTitle
             eyebrow="How It Works"
             title="Mining Explained"
-            description="The miner increments the nonce until the hash meets the difficulty target (starts with '00')."
+            description={`The miner increments the nonce until the hash meets the difficulty target (starts with "${DIFFICULTY_PREFIX}"). Finding 4 leading zeros requires testing thousands of nonces.`}
           />
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             {[
               {
                 step: "01",
                 title: "Compute Hash",
-                desc: "Combine block data + previous hash + nonce → hash function",
+                desc: "Combine block data + previous hash + nonce → deterministic hash function",
                 icon: "🔢",
               },
               {
                 step: "02",
                 title: "Check Target",
-                desc: 'Does the hash start with "00"? If not, increment nonce and retry.',
+                desc: `Does the hash start with "${DIFFICULTY_PREFIX}"? If not, increment nonce and try again.`,
                 icon: "🎯",
               },
               {
                 step: "03",
                 title: "Block Validated",
-                desc: "Once a valid hash is found, the block is accepted into the chain.",
+                desc: "Valid hash found! The block is accepted and linked to the chain.",
                 icon: "✅",
+              },
+              {
+                step: "04",
+                title: "Chain Integrity",
+                desc: "If any block changes, all subsequent blocks break and require re-mining.",
+                icon: "⛓️",
               },
             ].map((item, i) => (
               <motion.div
@@ -395,22 +388,26 @@ function BlockCard({
   onMine,
   isMining,
   isGenesis,
+  difficultyPrefix,
 }: {
   block: Block;
   onDataChange: (data: string) => void;
   onMine: () => void;
   isMining: boolean;
   isGenesis: boolean;
+  difficultyPrefix: string;
 }) {
+  const needsMining = !block.isMined || !block.isValid;
+
   const borderColor = block.isMining
     ? "border-warning/40"
-    : block.isValid
+    : block.isMined && block.isValid
     ? "border-success/30"
     : "border-danger/30";
 
   const glowStyle = block.isMining
     ? "shadow-[0_0_30px_rgba(255,181,71,0.15)]"
-    : block.isValid
+    : block.isMined && block.isValid
     ? "shadow-[0_0_30px_rgba(0,211,149,0.1)]"
     : "shadow-[0_0_30px_rgba(255,77,106,0.1)]";
 
@@ -438,7 +435,7 @@ function BlockCard({
         <div className="flex items-center gap-3">
           <div
             className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${
-              block.isValid
+              block.isMined && block.isValid
                 ? "bg-success/20 text-success"
                 : "bg-danger/20 text-danger"
             }`}
@@ -454,23 +451,29 @@ function BlockCard({
             </h3>
             <AnimatePresence mode="wait">
               <motion.span
-                key={block.isValid ? "valid" : "invalid"}
+                key={
+                  block.isMining
+                    ? "mining"
+                    : block.isMined && block.isValid
+                    ? "valid"
+                    : "invalid"
+                }
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.8 }}
                 className={`text-xs font-medium ${
                   block.isMining
                     ? "text-warning"
-                    : block.isValid
+                    : block.isMined && block.isValid
                     ? "text-success"
                     : "text-danger"
                 }`}
               >
                 {block.isMining
                   ? "⛏ Mining..."
-                  : block.isValid
-                  ? "✓ Valid"
-                  : "✕ Invalid"}
+                  : block.isMined && block.isValid
+                  ? "✓ Valid — Mined"
+                  : "✕ Invalid — Needs Mining"}
               </motion.span>
             </AnimatePresence>
           </div>
@@ -478,8 +481,8 @@ function BlockCard({
 
         <GlowButton
           onClick={onMine}
-          disabled={isMining || block.isValid}
-          variant={block.isValid ? "outline" : "primary"}
+          disabled={isMining || (block.isMined && block.isValid)}
+          variant={block.isMined && block.isValid ? "outline" : "primary"}
           size="sm"
         >
           {isMining ? (
@@ -489,7 +492,7 @@ function BlockCard({
             >
               ⛏
             </motion.span>
-          ) : block.isValid ? (
+          ) : block.isMined && block.isValid ? (
             "✓ Mined"
           ) : (
             "⛏ Mine"
@@ -545,20 +548,36 @@ function BlockCard({
         <div>
           <label className="text-xs font-medium text-text-secondary mb-1.5 block uppercase tracking-wider">
             Hash
+            <span className="ml-2 text-text-muted normal-case tracking-normal">
+              (must start with &quot;{difficultyPrefix}&quot;)
+            </span>
           </label>
           <motion.div
             animate={{
-              borderColor: block.isValid
-                ? "rgba(0, 211, 149, 0.3)"
-                : "rgba(255, 77, 106, 0.3)",
+              borderColor:
+                block.isMined && block.isValid
+                  ? "rgba(0, 211, 149, 0.3)"
+                  : "rgba(255, 77, 106, 0.3)",
             }}
             className={`px-4 py-2.5 rounded-[10px] border text-xs font-mono break-all select-all ${
-              block.isValid
+              block.isMined && block.isValid
                 ? "bg-success/5 text-success border-success/30"
                 : "bg-danger/5 text-danger border-danger/30"
             }`}
           >
-            {block.hash}
+            {/* Highlight the prefix */}
+            <span
+              className={`font-bold ${
+                block.hash.startsWith(difficultyPrefix)
+                  ? "text-success"
+                  : "text-danger"
+              }`}
+            >
+              {block.hash.slice(0, difficultyPrefix.length)}
+            </span>
+            <span className="opacity-70">
+              {block.hash.slice(difficultyPrefix.length)}
+            </span>
           </motion.div>
         </div>
       </div>
