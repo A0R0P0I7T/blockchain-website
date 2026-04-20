@@ -1,36 +1,86 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ChainLens — Interactive Blockchain & Web3 Education
 
-## Getting Started
+ChainLens is a premium, interactive Web3 education platform designed to make complex blockchain concepts intuitive. Built with cutting-edge web technologies, it provides a visual-first approach to learning about decentralized networks, Layer 2 scaling, and the mechanics of blockchain security.
 
-First, run the development server:
+![Preview Placeholder](https://via.placeholder.com/1200x600/0A0B0F/28A0F0?text=ChainLens+—+Visualize+the+Blockchain)
+
+## 🚀 Key Features
+
+### 1. Interactive Visualizer (Landing Page)
+Experience the flow of a blockchain through a **D3.js-powered animation system**. See floating blocks represent live data points, emphasizing the immutable yet dynamic nature of Distributed Ledger Technology (DLT).
+
+### 2. Deep-Dive Concepts
+Comprehensive comparisons that break down the "Why" and "How":
+- **Web2 vs. Web3**: Moving from centralized silos to decentralized ownership.
+- **BTC vs. ETH**: Comparing digital gold to the world's programmable computer.
+- **Public Keys vs. Private Keys**: Mastering the fundamentals of digital identity.
+- **Databases vs. Blockchains**: Understanding when to use immutable ledgers.
+
+### 3. Live Market Intelligence
+A real-time price tracking dashboard powered by **CoinGecko API**:
+- **Watchlist Search**: Add and track any cryptocurrency from thousands of available assets.
+- **Live Sparklines**: Visualize recent price trends with dynamic SVG trajectories.
+- **Market Dynamics**: Track 24-hour changes and price movements with millisecond precision.
+
+### 4. Hands-on Mining Simulator
+A high-fidelity **Proof-of-Work (PoW) simulator**:
+- **Real Mining Logic**: Mine blocks with a difficulty target of 4 leading zeros (`0000`).
+- **Chain Integrity**: Experience how changing data in one block invalidates the entire subsequent chain.
+- **Animated Nonce Search**: Watch the computational effort required to secure a block in real-time.
+
+## 🛠 Tech Stack
+
+- **Framework**: [Next.js 16+](https://nextjs.org/) (App Router & Turbopack)
+- **Styling**: [Tailwind CSS v4](https://tailwindcss.com/) with Glassmorphism
+- **Animations**: [Framer Motion](https://www.framer.com/motion/) for smooth layout transitions
+- **Visualization**: [D3.js](https://d3js.org/) for the core blockchain visual engine
+- **API**: [CoinGecko API](https://www.coingecko.com/en/api) for decentralized market data
+- **Typography**: Space Grotesk (Headers) & JetBrains Mono (Code/Technical Data)
+
+## 🏁 Getting Started
+
+### Prerequisites
+- Node.js 18.x or higher
+- npm, yarn, or pnpm
+
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone git@github-personal:A0R0P0I7T/Blockchain-Website.git
+   cd Blockchain-Website
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Run the development server:
+   ```bash
+   npm run dev
+   ```
+
+4. Build for production:
+   ```bash
+   npm run build
+   ```
+
+## 📂 Project Structure
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+├── src/
+│   ├── app/                # Next.js App Router (Pages & Routing)
+│   ├── components/
+│   │   ├── layout/         # Navbar, Footer, and Shell components
+│   │   ├── ui/             # Reusable Glassmorphism & Glow components
+│   │   └── viz/            # D3.js Blockchain visualizer
+│   └── globals.css         # Tailwind v4 & Global design tokens
+├── public/                 # Static assets
+└── next.config.ts          # Project configuration
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📄 License
+This project is for educational purposes. Feel free to use the concepts and components for your own Web3 projects.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+Built with ❤️ for the Web3 Community.
